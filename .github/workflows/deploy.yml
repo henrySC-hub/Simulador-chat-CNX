@@ -28,10 +28,14 @@ jobs:
           cache: "npm"
 
       - name: Install deps
+        # Si 'npm ci' te fallara por el lockfile, cámbialo a 'npm install'
         run: npm ci
 
       - name: Build
         run: npm run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

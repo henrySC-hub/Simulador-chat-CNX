@@ -4,6 +4,4 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  // 👇 muy importante para GitHub Pages
-  base: "/Simulador-chat-CNX/",
-});
+  base: "/Simulador-chat-CNX/", //Simulador-chat-CNX/});

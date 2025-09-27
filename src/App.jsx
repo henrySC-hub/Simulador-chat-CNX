@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { initializeApp, getApps } from "firebase/app";
+// src/App.jsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import { initializeApp } from "firebase/app";
 import {
   getFirestore,
   collection,
@@ -8,144 +9,233 @@ import {
   onSnapshot,
   query,
   orderBy,
-  limit,
 } from "firebase/firestore";
 
-// SIMULADOR DE CHAT — MODO RÁPIDO con URLs por rol
-// -------------------------------------------------------------
-// ✅ Firebase config embebido (una vez) — NO se pide en la UI
-// ✅ Un solo Room ID (editable en código o vía hash ?room= )
-// ✅ Dos URLs independientes:
-//      • #/agente        → Página del Agente
-//      • #/moderador     → Página del Moderador
-//    (Hash routing para que funcione en GitHub Pages sin 404)
-// ✅ En cada URL, el rol se auto-conecta y se oculta el otro panel
-// ✅ También puedes usar solo la home (/) con ambos paneles visibles
-// -------------------------------------------------------------
-
-// 1) TU configuración de Firebase (pegada una vez)
+// ================== Firebase (coloca tu config) ==================
+// Si ya lo inicializas en otro archivo, importa `db` desde allí y
+// borra este bloque de inicialización.
 const firebaseConfig = {
-  apiKey: "AIzaSyA3GBVke-k06TtwB34uLqqowomD5W_vzxE",
-  authDomain: "simulador-chat-cnx.firebaseapp.com",
-  projectId: "simulador-chat-cnx",
-  storageBucket: "simulador-chat-cnx.firebasestorage.app",
-  messagingSenderId: "716129241539",
-  appId: "1:716129241539:web:897b3e67784dd878919576"
+  // TODO: pega tu firebaseConfig aquí (apiKey, authDomain, projectId, etc.)
 };
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
-// 2) Sala por defecto. Cambia aquí si quieres otra.
-const DEFAULT_ROOM_ID = "sala-practica";
+// ================== Constantes ==================
+const palette = [
+  "#0f172a", // negro-azul
+  "#1d4ed8",
+  "#0ea5e9",
+  "#16a34a",
+  "#f59e0b",
+  "#ef4444",
+  "#a855f7",
+  "#22c55e",
+  "#2563eb",
+  "#fb7185",
+];
 
-const DEFAULT_AGENT_COLOR = "#111827"; // gris oscuro
-const DEFAULT_MOD_COLOR = "#2563eb";   // azul
+// Plantillas rápidas para el Agente
+const AGENT_TEMPLATES = [
+  "Hola, soy del soporte CNX. ¿En qué puedo ayudarte?",
+  "¿Podrías indicarme tu ID de cliente y el número de ticket?",
+  "He escalado tu caso al área técnica; te avisaremos por este chat.",
+  "¿Puedes reiniciar el equipo y confirmarme si las luces quedan en verde?",
+  "Gracias por contactarnos. Cierro el caso, pero si necesitas algo más, escribe aquí.",
+];
 
-function formatTime(date) {
-  if (!date) return "";
-  const d = date instanceof Date ? date : new Date(date);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
+// ================== Utilidades ==================
 function parseHash() {
-  // Soporta: #/agente?room=soporte1  |  #/moderador?room=...  |  #role=agent&room=...
-  const raw = (window.location.hash || "").replace(/^#/, "");
-  let role = null;
-  let room = null;
-
-  if (raw.startsWith("/")) {
-    const [path, qs] = raw.slice(1).split("?");
-    if (path === "agente") role = "agent";
-    if (path === "moderador") role = "moderator";
-    if (qs) {
-      const p = new URLSearchParams(qs);
-      room = p.get("room") || null;
-    }
-  } else if (raw.includes("=")) {
-    const p = new URLSearchParams(raw);
-    const r = p.get("role");
-    if (r === "agent" || r === "agente") role = "agent";
-    if (r === "moderator" || r === "moderador") role = "moderator";
-    room = p.get("room") || null;
-  }
-  return { role, room };
+  // #/agente  #/moderador  #/?room=algo
+  const h = window.location.hash.replace(/^#\/?/, "").trim();
+  const [path, qs] = h.split("?");
+  const params = new URLSearchParams(qs || "");
+  const room = params.get("room") || "";
+  const role =
+    path === "agente" || path === "agent"
+      ? "agent"
+      : path === "moderador" || path === "moderator"
+      ? "moderator"
+      : null;
+  return { room, role };
 }
 
-function shareLink(role, roomId) {
-  const base = window.location.origin + window.location.pathname + window.location.search;
-  const path = role === "agent" ? "#/agente" : "#/moderador";
-  const qs = roomId ? `?room=${encodeURIComponent(roomId)}` : "";
-  return `${base}${path}${qs}`;
+function shortName(name) {
+  const t = (name || "").trim();
+  if (!t) return "??";
+  const parts = t.split(/\s+/);
+  if (parts.length === 1) return t[0]?.toUpperCase() ?? "A";
+  return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
-export default function ChatSim() {
-  // 1) Lee rol y sala desde el hash (para URLs por rol)
-  const init = parseHash();
-  const [forcedRole, setForcedRole] = useState(init.role); // 'agent' | 'moderator' | null
-  const [roomId, setRoomId] = useState(init.room ?? "");
-  // Normaliza el room; si está vacío NO nos suscribimos para evitar mostrar chat
-  const normalizedRoomId = (roomId || "").trim();
-  const effectiveRoomId = normalizedRoomId || DEFAULT_ROOM_ID; // solo para fallback UI si lo necesitas
-  const hasRoom = !!normalizedRoomId;
+// ================== Componentes ==================
+function RolePanel({ title, autoNote, state, setState, onExit, isAgent }) {
+  return (
+    <div className="rounded-2xl bg-white shadow-sm border border-neutral-200 p-4">
+      <div className="flex items-center gap-3 mb-2">
+        <div
+          className="w-10 h-10 rounded-full grid place-items-center text-white text-sm font-semibold"
+          style={{ background: state.color }}
+          title={state.name}
+        >
+          {shortName(state.name)}
+        </div>
+        <div>
+          <div className="text-base font-semibold">
+            {title}{" "}
+            <span className="text-xs text-neutral-400 align-middle">(auto)</span>
+          </div>
+          <div className="text-xs text-neutral-500">
+            Elige nombre y color. Pulsa Entrar.
+          </div>
+        </div>
+      </div>
 
-  // 2) Firebase init + suscripción a la sala
-  const [connected, setConnected] = useState(false);
+      <label className="text-sm text-neutral-700">Nombre</label>
+      <input
+        className="w-full mt-1 mb-3 rounded-md border px-3 py-2"
+        placeholder={title}
+        value={state.name}
+        onChange={(e) => setState((s) => ({ ...s, name: e.target.value }))}
+      />
+
+      <div className="text-sm text-neutral-700 mb-1">Color</div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        {palette.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => setState((s) => ({ ...s, color: c }))}
+            className="w-6 h-6 rounded-md ring-offset-2 focus:ring-2"
+            style={{ background: c, outline: state.color === c ? "2px solid #111" : "none" }}
+            title={c}
+          />
+        ))}
+      </div>
+
+      <div className="flex gap-2">
+        {!state.joined ? (
+          <button
+            type="button"
+            className="px-3 py-2 rounded-md bg-black text-white hover:bg-neutral-800"
+            onClick={() => setState((s) => ({ ...s, joined: true }))}
+          >
+            Entrar
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="px-3 py-2 rounded-md border border-neutral-300 hover:bg-neutral-100"
+            onClick={onExit}
+          >
+            Salir
+          </button>
+        )}
+
+        {autoNote && (
+          <span className="text-xs text-neutral-400 self-center">{autoNote}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function QuickTemplates({ onUse }) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {AGENT_TEMPLATES.map((t, i) => (
+        <button
+          key={i}
+          type="button"
+          onClick={() => onUse(t)}
+          className="text-xs rounded-full bg-neutral-200 hover:bg-neutral-300 px-2 py-1"
+          title={t}
+        >
+          {t.length > 28 ? t.slice(0, 28) + "…" : t}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ================== App ==================
+export default function App() {
+  // Room y hash
+  const [roomId, setRoomId] = useState(parseHash().room || ""); // por defecto vacío
+  const [forcedRole, setForcedRole] = useState(parseHash().role);
+
+  // Estados de los roles
+  const [agent, setAgent] = useState({
+    name: "Agente",
+    color: palette[0],
+    joined: false,
+  });
+  const [moderator, setModerator] = useState({
+    name: "Moderador",
+    color: palette[1],
+    joined: false,
+  });
+
+  // Mensajes y conexión
   const [messages, setMessages] = useState([]);
-  const listRef = useRef(null);
-  const fb = useRef({ app: null, db: null, unsub: null });
+  const [connected, setConnected] = useState(false);
   const [connError, setConnError] = useState("");
 
-  useEffect(() => {
-    // init Firebase una vez
-    if (!getApps().length) fb.current.app = initializeApp(firebaseConfig);
-    else fb.current.app = getApps()[0];
-    fb.current.db = getFirestore();
-  }, []);
+  // Drafts y refs para inputs
+  const [agentDraft, setAgentDraft] = useState("");
+  const [moderatorDraft, setModeratorDraft] = useState("");
+  const agentInputRef = useRef(null);
+  const modInputRef = useRef(null);
 
+  // ---- Suscripción a Firestore ----
   useEffect(() => {
-    if (!fb.current.db) return;
-    // Si no hay room, desuscribe y limpia para no mostrar chat
-    if (!hasRoom) {
-      if (fb.current.unsub) fb.current.unsub();
-      setMessages([]);
-      setConnected(false);
-      setConnError("");
-      return;
-    }
-    if (fb.current.unsub) fb.current.unsub();
+    setMessages([]);
+    setConnected(false);
+    setConnError("");
+
+    if (!roomId) return;
 
     const q = query(
-      collection(fb.current.db, "rooms", normalizedRoomId, "messages"),
-      orderBy("at", "asc"),
-      limit(1000)
+      collection(db, "rooms", roomId, "msgs"),
+      orderBy("at", "asc")
     );
-
-    fb.current.unsub = onSnapshot(
+    const unsub = onSnapshot(
       q,
-      {
-        next: (snap) => {
-          const arr = [];
-          snap.forEach((doc) => {
-            const d = doc.data();
-            const at = d.at?.toDate ? d.at.toDate().toISOString() : d.at || new Date().toISOString();
-            arr.push({ id: doc.id, from: d.from, nick: d.nick, color: d.color, text: d.text, at });
+      (snap) => {
+        const arr = [];
+        snap.forEach((doc) => {
+          const d = doc.data();
+          arr.push({
+            id: doc.id,
+            text: d.text,
+            nick: d.nick,
+            color: d.color,
+            from: d.from, // 'agent' | 'moderator'
+            at: d.at?.toDate ? d.at.toDate().toISOString() : new Date().toISOString(),
           });
-          setMessages(arr);
-          setConnected(true);
-          setConnError("");
-        },
-        error: (e) => {
-          console.error("onSnapshot error", e);
-          setConnected(false);
-          setConnError(e?.message || "Error conectando a Firestore (¿reglas de seguridad?)");
-        },
+        });
+        setMessages(arr);
+        setConnected(true);
+        setConnError("");
+      },
+      (e) => {
+        console.error("onSnapshot error", e);
+        setConnected(false);
+        setConnError(e?.message || "Error conectando a Firestore");
       }
     );
 
-    return () => { if (fb.current.unsub) fb.current.unsub(); };
-  }, [normalizedRoomId, hasRoom]);
+    return () => unsub();
+  }, [roomId]);
 
-  useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight; }, [messages]);
+  // Mantener scroll al final cuando llegan mensajes
+  const listRef = useRef(null);
+  useEffect(() => {
+    if (listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
+    }
+  }, [messages]);
 
-  // 3) Manejar cambios del hash (usuario cambia /agente ↔ /moderador o room)
+  // Cambios de hash (#/agente, #/moderador, ?room=…)
   useEffect(() => {
     const onHash = () => {
       const p = parseHash();
@@ -156,304 +246,297 @@ export default function ChatSim() {
     return () => window.removeEventListener("hashchange", onHash);
   }, [forcedRole, roomId]);
 
-  // 4) Estados de cada rol (solo uno se muestra cuando forcedRole está definido)
-  const [agent, setAgent] = useState({ joined: !!(init.role === "agent"), name: "Agente", color: DEFAULT_AGENT_COLOR, draft: "" });
-  const [mod, setMod] = useState({ joined: !!(init.role === "moderator"), name: "Moderador", color: DEFAULT_MOD_COLOR, draft: "" });
-
-  useEffect(() => {
-    if (forcedRole === "agent") setAgent((s) => ({ ...s, joined: true }));
-    if (forcedRole === "moderator") setMod((s) => ({ ...s, joined: true }));
-  }, [forcedRole]);
-
-  async function send(role, payload) {
-    if (!fb.current.db) return alert("Firebase no configurado correctamente");
-    if (!hasRoom) return alert("Escribe un Room ID antes de enviar");
-    const text = (payload.draft || "").trim();
-    if (!text) return;
+  // ---- Enviar mensaje ----
+  async function send(role, text) {
+    const who = role === "agent" ? agent : moderator;
+    if (!roomId || !text.trim() || !who.joined) return;
     try {
-      await addDoc(collection(fb.current.db, "rooms", normalizedRoomId, "messages"), {
+      await addDoc(collection(db, "rooms", roomId, "msgs"), {
+        text: text.trim(),
+        nick: who.name || role,
+        color: who.color || "#111",
         from: role,
-        nick: payload.name || (role === "agent" ? "Agente" : "Moderador"),
-        color: payload.color || (role === "agent" ? DEFAULT_AGENT_COLOR : DEFAULT_MOD_COLOR),
-        text,
         at: serverTimestamp(),
       });
-      if (role === "agent") setAgent((s) => ({ ...s, draft: "" }));
-      else setMod((s) => ({ ...s, draft: "" }));
     } catch (e) {
-      console.error(e);
-      alert("No se pudo enviar: " + (e.message || e));
+      console.error("send error", e);
+      alert("No se pudo enviar: " + (e?.message || e));
     }
   }
 
-  const palette = ["#111827", "#2563eb", "#16a34a", "#dc2626", "#7c3aed", "#ea580c", "#0891b2", "#b91c1c"];
+  // ---- UI helpers ----
+  const showAgentPanel = forcedRole !== "moderator";
+  const showModPanel = forcedRole !== "agent";
 
-  const agentLink = shareLink("agent", normalizedRoomId);
-  const modLink = shareLink("moderator", normalizedRoomId);
+  const enterLink = useMemo(() => {
+    const base = window.location.origin + window.location.pathname;
+    const roomPart = roomId ? `?room=${encodeURIComponent(roomId)}` : "";
+    return {
+      agent: `${base}#/agente${roomPart}`,
+      moderator: `${base}#/moderador${roomPart}`,
+      generic: `${base}#/${roomPart}`,
+    };
+  }, [roomId]);
 
-  const showAgentPanel = !forcedRole || forcedRole === "agent";
-  const showModPanel = !forcedRole || forcedRole === "moderator";
+  const onExitAgent = () => {
+    setAgent((s) => ({ ...s, joined: false }));
+    window.location.hash = "/"; // volver al landing
+  };
+  const onExitModerator = () => {
+    setModerator((s) => ({ ...s, joined: false }));
+    window.location.hash = "/"; // volver al landing
+  };
 
+  // ======= Render =======
   return (
-    <div className="w-full min-h-[90vh] bg-neutral-100 text-neutral-900 flex flex-col">
+    <div className="min-h-screen bg-neutral-50 text-neutral-900">
       {/* Header */}
       <header className="sticky top-0 z-10 backdrop-blur bg-white/70 border-b border-neutral-200">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3 justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-2xl bg-neutral-900 text-white grid place-items-center font-bold">💬</div>
-            <div>
-              <h1 className="text-lg font-semibold leading-tight">SIMULADOR DE CHAT CNX</h1>
-              <p className="text-xs text-neutral-500">Usa URLs por rol. Sin configuración.</p>
-            </div>
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="text-lg font-semibold leading-tight">
+            SIMULADOR DE CHAT CNX
           </div>
-          <div className="text-right">
-            <div className="text-xs text-neutral-500">Sala: <span className="font-medium">{normalizedRoomId || "—"}</span></div>
-            <div className="text-[11px] text-neutral-500">
-              Enlaces: <a className="underline" href={agentLink}>Agente</a> · <a className="underline" href={modLink}>Moderador</a>
-            </div>
+          <div className="text-xs text-neutral-500">
+            Sala:{" "}
+            <span className="font-medium text-neutral-700">
+              {roomId || "(sin sala)"}
+            </span>
+            <span className="ml-4">
+              Enlaces:{" "}
+              <a
+                className="underline"
+                href={enterLink.agent}
+                title="Abrir como Agente"
+              >
+                Agente
+              </a>{" "}
+              ·{" "}
+              <a
+                className="underline"
+                href={enterLink.moderator}
+                title="Abrir como Moderador"
+              >
+                Moderador
+              </a>
+            </span>
           </div>
         </div>
       </header>
 
-      {/* Body */}
-      <div className="max-w-6xl mx-auto w-full px-4 py-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* Paneles (se ocultan según URL) */}
-        <section className="lg:col-span-3 space-y-4 order-2 lg:order-1">
-          {!forcedRole ? (
-            <LandingCard
-              roomId={roomId}
-              setRoomId={setRoomId}
-              agentLink={agentLink}
-              modLink={modLink}
+      <main className="max-w-6xl mx-auto px-4 py-4 grid lg:grid-cols-12 gap-4">
+        {/* Panel izquierdo: landing + roles */}
+        <section className="lg:col-span-3 order-1 lg:order-none space-y-4">
+          {/* Landing / selector de Room */}
+          <div className="rounded-2xl bg-white shadow-sm border border-neutral-200 p-4">
+            <div className="text-sm font-medium mb-2">
+              ¿Eres agente o moderador?
+            </div>
+            <div className="text-xs text-neutral-500 mb-3">
+              Elige tu rol y entrarás al chat. Puedes fijar la sala aquí abajo.
+            </div>
+
+            <label className="text-sm text-neutral-700">Room ID</label>
+            <input
+              className="w-full mt-1 mb-3 rounded-md border px-3 py-2"
+              placeholder="(escribe una sala)"
+              value={roomId}
+              onChange={(e) => setRoomId(e.target.value)}
             />
-          ) : (
-            <>
-              {showAgentPanel && (
-                <RolePanel
-                  title="Agente"
-                  role="agent"
-                  state={agent}
-                  setState={setAgent}
-                  palette={palette}
-                  autoNote={forcedRole === "agent" ? "(auto)" : undefined}
-                />
-              )}
-              {showModPanel && (
-                <RolePanel
-                  title="Moderador"
-                  role="moderator"
-                  state={mod}
-                  setState={setMod}
-                  palette={palette}
-                  autoNote={forcedRole === "moderator" ? "(auto)" : undefined}
-                />
-              )}
-            </>
-          )}
-        </section>
 
-        {/* Chat */}
-        <section className="lg:col-span-9 order-1 lg:order-2">
-          <div className="rounded-2xl bg-white shadow-sm border border-neutral-200 flex flex-col h-[70vh]">
-            <div ref={listRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-  {
-    !hasRoom ? (
-      <div className="h-full w-full grid place-items-center text-neutral-500 text-sm text-center px-6">
-        Escribe un <b>Room ID</b> en el panel izquierdo para comenzar.
-      </div>
-    ) : (
-      (messages.length === 0 && !connError) && (
-        <div className="h-full w-full grid place-items-center text-neutral-500 text-sm text-center px-6">
-          {connected ? "Aún no hay mensajes. ¡Escribe desde alguno de los paneles!" : "Conectando..."}
-        </div>
-      )
-    )
-  }
+            <div className="flex gap-2">
+              <a
+                className="px-3 py-2 rounded-md bg-black text-white hover:bg-neutral-800 text-sm"
+                href={enterLink.agent}
+              >
+                Entrar como Agente
+              </a>
+              <a
+                className="px-3 py-2 rounded-md border border-neutral-300 hover:bg-neutral-100 text-sm"
+                href={enterLink.moderator}
+              >
+                Entrar como Moderador
+              </a>
+            </div>
 
-  {connError && (
-    <div className="h-full w-full grid place-items-center text-red-600 text-sm text-center px-6">
-      <div className="max-w-md">
-        <div className="font-semibold mb-1">No se pudo conectar a Firestore</div>
-        <div className="text-red-500/90">{connError}</div>
-        <div className="text-[11px] text-neutral-500 mt-2">
-          Tip: en pruebas usa reglas abiertas en Firestore o crea la base en modo de prueba.
-        </div>
-      </div>
-    </div>
-  )}
-
-  {messages.map((m) => (
-    <MessageBubble
-      key={m.id}
-      align={m.from === "agent" ? "left" : "right"}
-      name={m.nick || (m.from === "agent" ? "Agente" : "Moderador")}
-      color={m.color || (m.from === "agent" ? DEFAULT_AGENT_COLOR : DEFAULT_MOD_COLOR)}
-      text={m.text}
-      time={formatTime(m.at)}
-    />
-  ))}
-</div>
-
-
-            {/* Entradas: si hay URL por rol, muestra SOLO una caja */}
-            <div className="border-t border-neutral-200 p-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-              {(!forcedRole || forcedRole === "agent") && (
-                <InputBox
-                  disabled={!agent.joined || !hasRoom}
-                  label={agent.joined ? `Escribe como ${agent.name}` : "Agente: presiona Entrar"}
-                  value={agent.draft}
-                  onChange={(v) => setAgent((s) => ({ ...s, draft: v }))}
-                  onSend={() => send("agent", agent)}
-                  color={agent.color}
-                />
-              )}
-              {(!forcedRole || forcedRole === "moderator") && (
-                <InputBox
-                  disabled={!mod.joined || !hasRoom}
-                  label={mod.joined ? `Escribe como ${mod.name}` : "Moderador: presiona Entrar"}
-                  value={mod.draft}
-                  onChange={(v) => setMod((s) => ({ ...s, draft: v }))}
-                  onSend={() => send("moderator", mod)}
-                  color={mod.color}
-                />
-              )}
+            <div className="text-xs text-neutral-500 mt-3">
+              Comparte este enlace (genérico) y deja que cada uno elija:
+              <div className="mt-1 break-all">{enterLink.generic}</div>
             </div>
           </div>
-        </section>
-      </div>
 
-      <footer className="text-xs text-neutral-500 text-center py-3">
-        Abre <code>#/agente</code> y <code>#/moderador</code> (mismo room) en dos PCs o dos tabs. Para cambiar de sala: añade <code>?room=soporte1</code>.
-      </footer>
-    </div>
-  );
-}
-
-function LandingCard({ roomId, setRoomId, agentLink, modLink }) {
-  return (
-    <div className="rounded-2xl bg-white border border-neutral-200 shadow-sm p-4">
-      <h2 className="font-semibold mb-1">¿Eres agente o moderador?</h2>
-      <p className="text-xs text-neutral-500 mb-3">Elige tu rol y entrarás al chat. Puedes fijar la sala aquí abajo.</p>
-      <div className="mb-3">
-        <label className="text-xs text-neutral-600">Room ID</label>
-        <input
-          className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 outline-none focus:ring-2 focus:ring-neutral-300"
-          placeholder="Ej. soporte1"
-          value={roomId}
-          onChange={(e) => setRoomId(e.target.value)}
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <a href={agentLink} className="px-3 py-2 rounded-xl text-center bg-neutral-900 text-white hover:opacity-90">Entrar como Agente</a>
-        <a href={modLink} className="px-3 py-2 rounded-xl text-center border border-neutral-300 hover:bg-neutral-50">Entrar como Moderador</a>
-      </div>
-      <div className="text-[11px] text-neutral-500 mt-2">Comparte este enlace (genérico) y deja que cada uno elija: <code>#{"/"}</code>. Si quieres sala fija en el link: <code>#{"/?room=soporte1"}</code>.</div>
-    </div>
-  );
-}
-
-function RolePanel({ title, role, state, setState, palette, autoNote }) {
-  const initials = useMemo(() => (state.name || title).slice(0, 2).toUpperCase(), [state.name, title]);
-  return (
-    <div className="rounded-2xl bg-white border border-neutral-200 shadow-sm p-4">
-      <div className="flex items-center gap-3 mb-3">
-        <div className="w-10 h-10 rounded-2xl text-white grid place-items-center font-semibold" style={{ backgroundColor: state.color }}>{initials}</div>
-        <div className="flex-1">
-          <h2 className="font-semibold">{title} {autoNote ? <span className="text-xs text-neutral-400">{autoNote}</span> : null}</h2>
-          <p className="text-xs text-neutral-500">Elige nombre y color. Pulsa Entrar.</p>
-        </div>
-      </div>
-
-      <div className="space-y-3">
-        <div>
-          <label className="text-xs text-neutral-600">Nombre</label>
-          <input
-            className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 outline-none focus:ring-2 focus:ring-neutral-300"
-            placeholder={title}
-            value={state.name}
-            onChange={(e) => setState((s) => ({ ...s, name: e.target.value }))}
-          />
-        </div>
-
-        <ColorPicker color={state.color} setColor={(c) => setState((s) => ({ ...s, color: c }))} palette={palette} />
-
-        <div className="flex gap-2">
-          {!state.joined ? (
-            <button onClick={() => setState((s) => ({ ...s, joined: true }))} className="px-3 py-1.5 rounded-xl bg-neutral-900 text-white hover:opacity-90">Entrar</button>
-          ) : (
-            <button onClick={() => setState((s) => ({ ...s, joined: false, draft: "" }))} className="px-3 py-1.5 rounded-xl border border-neutral-300 hover:bg-neutral-50">Salir</button>
+          {/* Panel Agente */}
+          {showAgentPanel && (
+            <RolePanel
+              title="Agente"
+              autoNote="(auto)"
+              state={agent}
+              setState={setAgent}
+              onExit={onExitAgent}
+              isAgent
+            />
           )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
-function ColorPicker({ color, setColor, palette }) {
-  return (
-    <div>
-      <label className="text-xs text-neutral-600">Color</label>
-      <div className="mt-1 flex items-center gap-2 flex-wrap">
-        {palette.map((c) => (
-          <button key={c} onClick={() => setColor(c)} className="w-6 h-6 rounded-lg border border-neutral-300" style={{ backgroundColor: c, outline: color === c ? "2px solid black" : "none" }} title={c} />
-        ))}
-        <input type="color" className="ml-1 w-10 h-6 rounded-lg border border-neutral-300" value={color} onChange={(e) => setColor(e.target.value)} title="Personalizar" />
-      </div>
-    </div>
-  );
-}
+          {/* Panel Moderador */}
+          {showModPanel && (
+            <RolePanel
+              title="Moderador"
+              autoNote="(auto)"
+              state={moderator}
+              setState={setModerator}
+              onExit={onExitModerator}
+              isAgent={false}
+            />
+          )}
+        </section>
 
-function MessageBubble({ align = "left", name, color, text, time }) {
-  const isLeft = align === "left";
-  return (
-    <div className={`flex ${isLeft ? "justify-start" : "justify-end"}`}>
-      <div className={`max-w-[85%] sm:max-w-[70%] flex ${isLeft ? "flex-row" : "flex-row-reverse"} items-end gap-2`}>
-        {/* Avatar */}
-        <div className="w-8 h-8 rounded-xl text-white grid place-items-center text-xs font-semibold shrink-0" style={{ backgroundColor: color }} title={name}>
-          {name?.slice(0, 2).toUpperCase()}
-        </div>
-        {/* Bubble */}
-        <div className={`${isLeft ? "bg-neutral-100" : "bg-neutral-900 text-white"} rounded-2xl px-3 py-2 shadow-sm border ${isLeft ? "border-neutral-200" : "border-neutral-800"}`}>
-          <div className="text-xs opacity-70 mb-0.5">{name}</div>
-          <div className="whitespace-pre-wrap text-sm">{text}</div>
-          <div className={`text-[10px] mt-1 ${isLeft ? "text-neutral-500" : "text-neutral-300"}`}>{time}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
+        {/* Panel derecho: chat */}
+        <section className="lg:col-span-9">
+          <div
+            ref={listRef}
+            className="rounded-2xl bg-white shadow-sm border border-neutral-200 h-[70vh] overflow-y-auto p-4 space-y-3"
+          >
+            {/* Placeholders */}
+            {!roomId ? (
+              <div className="h-full grid place-items-center text-neutral-500 text-sm text-center px-6">
+                Escribe un <b>Room ID</b> en el panel izquierdo para comenzar.
+              </div>
+            ) : messages.length === 0 && !connError ? (
+              <div className="h-full grid place-items-center text-neutral-500 text-sm text-center px-6">
+                {connected ? "Aún no hay mensajes. ¡Escribe desde alguno de los paneles!" : "Conectando..."}
+              </div>
+            ) : null}
 
-function InputBox({ disabled, label, value, onChange, onSend, color }) {
-  return (
-    <div className={`rounded-xl border ${disabled ? "border-neutral-200 bg-neutral-50" : "border-neutral-300 bg-white"} p-2`}>
-      <div className="text-xs mb-1 text-neutral-600 flex items-center justify-between">
-        <span>{label}</span>
-        {disabled && <span className="italic text-neutral-400">(Pulsa Entrar en el panel)</span>}
-      </div>
-      <div className="flex items-end gap-2">
-        <textarea
-          disabled={disabled}
-          rows={2}
-          className="flex-1 resize-none rounded-xl border border-neutral-300 px-3 py-2 outline-none focus:ring-2 focus:ring-neutral-300 disabled:opacity-60"
-          placeholder={disabled ? "" : "Escribe y presiona Enter (Shift+Enter = salto)"}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              onSend();
-            }
-          }}
-        />
-        <button
-          disabled={disabled || !value.trim()}
-          onClick={onSend}
-          className="px-3 py-2 rounded-xl text-white disabled:opacity-50"
-          style={{ backgroundColor: color }}
-        >
-          Enviar
-        </button>
-      </div>
+            {/* Mensajes */}
+            {messages.map((m) => (
+              <div
+                key={m.id}
+                className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm shadow-sm ${
+                  m.from === "agent"
+                    ? "bg-neutral-100 self-start"
+                    : "bg-black text-white ml-auto"
+                }`}
+                style={{ borderLeft: `4px solid ${m.color || "#111"}` }}
+              >
+                <div className="text-[11px] opacity-70 mb-0.5">{m.nick}</div>
+                <div className="whitespace-pre-wrap">{m.text}</div>
+              </div>
+            ))}
+
+            {/* Error de conexión */}
+            {!!connError && (
+              <div className="mt-3 text-center text-red-600 text-sm">
+                No se pudo conectar a Firestore: {connError}
+              </div>
+            )}
+          </div>
+
+          {/* Área de envío */}
+          <div className="grid lg:grid-cols-2 gap-3 mt-3">
+            {/* Agente */}
+            <div className="rounded-xl border border-neutral-200 p-2">
+              <div className="text-xs text-neutral-500 mb-1">
+                {agent.joined
+                  ? "Escribe como Agente:"
+                  : "(Pulsa Entrar en el panel de Agente)"}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  ref={agentInputRef}
+                  className="flex-1 rounded-md border px-3 py-2"
+                  placeholder="Escribe como Agente"
+                  value={agentDraft}
+                  onChange={(e) => setAgentDraft(e.target.value)}
+                  disabled={!agent.joined}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (agentDraft.trim()) {
+                        send("agent", agentDraft);
+                        setAgentDraft("");
+                      }
+                    }
+                  }}
+                />
+                <button
+                  className="px-3 py-2 rounded-md bg-black text-white hover:bg-neutral-800 disabled:opacity-40"
+                  disabled={!agent.joined || !agentDraft.trim()}
+                  onClick={() => {
+                    send("agent", agentDraft);
+                    setAgentDraft("");
+                  }}
+                >
+                  Enviar
+                </button>
+              </div>
+
+              {/* Templates rápidos del Agente */}
+              <QuickTemplates
+                onUse={(txt) => {
+                  // Opción simple: reemplazar todo
+                  // setAgentDraft(txt);
+
+                  // Opción PRO: insertar donde esté el cursor
+                  const el = agentInputRef.current;
+                  if (!el) return setAgentDraft(txt);
+                  const start = el.selectionStart ?? el.value.length;
+                  const end = el.selectionEnd ?? el.value.length;
+                  const value = el.value ?? "";
+                  const next = value.slice(0, start) + txt + value.slice(end);
+                  setAgentDraft(next);
+                  // Devolver foco y cursor al final del insert
+                  requestAnimationFrame(() => {
+                    el.focus();
+                    const pos = start + txt.length;
+                    el.setSelectionRange(pos, pos);
+                  });
+                }}
+              />
+            </div>
+
+            {/* Moderador */}
+            <div className="rounded-xl border border-neutral-200 p-2">
+              <div className="text-xs text-neutral-500 mb-1">
+                {moderator.joined
+                  ? "Escribe como Moderador:"
+                  : "(Pulsa Entrar en el panel de Moderador)"}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  ref={modInputRef}
+                  className="flex-1 rounded-md border px-3 py-2"
+                  placeholder="Escribe como Moderador"
+                  value={moderatorDraft}
+                  onChange={(e) => setModeratorDraft(e.target.value)}
+                  disabled={!moderator.joined}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (moderatorDraft.trim()) {
+                        send("moderator", moderatorDraft);
+                        setModeratorDraft("");
+                      }
+                    }
+                  }}
+                />
+                <button
+                  className="px-3 py-2 rounded-md bg-black text-white hover:bg-neutral-800 disabled:opacity-40"
+                  disabled={!moderator.joined || !moderatorDraft.trim()}
+                  onClick={() => {
+                    send("moderator", moderatorDraft);
+                    setModeratorDraft("");
+                  }}
+                >
+                  Enviar
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="text-[11px] text-neutral-400 mt-3 text-center">
+            
+          </div>
+        </section>
+      </main>
     </div>
   );
 }

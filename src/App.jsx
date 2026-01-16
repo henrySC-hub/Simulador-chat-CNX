@@ -91,8 +91,7 @@ function Header({ roomId, isAgent }) {
           <span className="text-neutral-500">{roomId || "—"}</span>
         </h1>
         <nav className="text-sm space-x-3">
-          <a className={`underline ${isAgent ? "font-semibold" : ""}`} href="#/agente">Agente</a>
-          <a className={`${!isAgent ? "font-semibold" : ""} underline`} href="#/moderador">Moderador</a>
+       
         </nav>
       </div>
     </header>
@@ -102,52 +101,150 @@ function Header({ roomId, isAgent }) {
 /* =========================
    LANDING
    ========================= */
+/* =========================
+   LANDING (elegante + validaciones)
+   ========================= */
 function Landing({ roomDraft, setRoomDraft, onEnter }) {
+  const [role, setRole] = useState("");            // 'agent' | 'moderator'
+  const roomOk = roomDraft.trim().length > 0;
+  const roleOk = !!role;
+  const canEnter = roomOk && roleOk;
+
+  const submit = () => {
+    if (!canEnter) return;
+    onEnter(role); // usa tu goEnter(targetRole) existente
+  };
+
   return (
-    <main className="min-h-[70vh] bg-neutral-50">
+    <main className="relative min-h-[88vh] overflow-hidden bg-gradient-to-b from-neutral-50 via-white to-neutral-100">
+      {/* blobs decorativos */}
+      <div className="pointer-events-none absolute -top-24 -left-24 h-72 w-72 rounded-full bg-indigo-200/40 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-24 -right-24 h-72 w-72 rounded-full bg-rose-200/40 blur-3xl" />
+
       <div className="max-w-4xl mx-auto px-4 py-12">
-        <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-center">
-          SIMULADOR DE CHAT CNX
-        </h1>
-        <p className="text-neutral-600 text-center mt-2">Ingrese el ID de sala y elija su rol.</p>
+        {/* Hero */}
+        <div className="text-center">
+          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">
+            <span className="text-neutral-900">SIMULADOR DE CHAT CNX</span>
+          </h1>
+          <p className="mt-2 text-neutral-600">
+            Ingrese el <b>ID ROOM</b> y seleccione su <b>rol</b> para continuar.
+          </p>
+        </div>
 
-        <div className="max-w-xl mx-auto mt-8 bg-white rounded-xl shadow p-6">
-          <label className="block text-sm font-medium text-neutral-700 mb-2">ID ROOM</label>
-          <input
-            className="w-full rounded-lg border px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500"
-            placeholder="CNX-123456"
-            value={roomDraft}
-            onChange={(e) => setRoomDraft(e.target.value)}
-          />
+        {/* Card principal */}
+        <div className="card mt-10 p-6 md:p-8">
+          {/* ID ROOM */}
+          <label className="block text-sm font-medium text-neutral-700 mb-2">
+            ID ROOM
+          </label>
+          <div className="flex gap-3">
+            <div className="relative flex-1">
+              <input
+                className={[
+                  "w-full rounded-xl border px-4 py-3 outline-none transition",
+                  roomOk
+                    ? "focus:ring-2 focus:ring-indigo-500"
+                    : "focus:ring-2 focus:ring-rose-400",
+                ].join(" ")}
+                placeholder="CNX-123456"
+                value={roomDraft}
+                onChange={(e) => setRoomDraft(e.target.value.toUpperCase())}
+                onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+                aria-invalid={!roomOk}
+                aria-describedby="room-help"
+              />
+              {!roomOk && (
+                <p id="room-help" className="mt-1 text-xs text-rose-600">
+                  Ingresa un ID de sala para habilitar el ingreso.
+                </p>
+              )}
+            </div>
+          </div>
 
+          {/* Selector de rol (cards) */}
+          <div className="mt-6">
+            <div className="text-sm font-medium text-neutral-700 mb-2">
+              Seleccione su rol
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setRole("agent")}
+                className={[
+                  "rounded-xl border px-4 py-4 text-left transition",
+                  role === "agent"
+                    ? "ring-2 ring-indigo-500 border-indigo-500 bg-indigo-50"
+                    : "hover:bg-neutral-50",
+                ].join(" ")}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="h-9 w-9 rounded-full grid place-items-center bg-indigo-600 text-white font-semibold">
+                    AG
+                  </div>
+                  <div>
+                    <div className="font-semibold">Agente</div>
+                    <p className="text-xs text-neutral-500">
+                      Soporte / atención al partner.
+                    </p>
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setRole("moderator")}
+                className={[
+                  "rounded-xl border px-4 py-4 text-left transition",
+                  role === "moderator"
+                    ? "ring-2 ring-rose-500 border-rose-500 bg-rose-50"
+                    : "hover:bg-neutral-50",
+                ].join(" ")}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="h-9 w-9 rounded-full grid place-items-center bg-rose-500 text-white font-semibold">
+                    MO
+                  </div>
+                  <div>
+                    <div className="font-semibold">Moderador</div>
+                    <p className="text-xs text-neutral-500">
+                      Revisión / coordinación del caso.
+                    </p>
+                  </div>
+                </div>
+              </button>
+            </div>
+            {!roleOk && (
+              <p className="mt-2 text-xs text-rose-600">
+                Selecciona tu rol para continuar.
+              </p>
+            )}
+          </div>
+
+          {/* CTA */}
           <button
-            className="w-full mt-4 bg-rose-500 hover:bg-rose-600 text-white font-semibold rounded-lg py-3"
-            onClick={() => onEnter("agent")}
+            onClick={submit}
+            disabled={!canEnter}
+            className={[
+              "w-full mt-6 rounded-xl px-4 py-3 font-semibold transition",
+              canEnter
+                ? "bg-indigo-600 text-white hover:bg-indigo-700"
+                : "bg-neutral-200 text-neutral-500 cursor-not-allowed",
+            ].join(" ")}
+            title={!canEnter ? "Completa ID ROOM y selecciona rol" : "Ingresar"}
           >
-            Ingresar como Agente
+            Ingresar
           </button>
 
-          <p className="text-center text-sm text-neutral-500 mt-4">¿Eres agente o moderador?</p>
-
-          <div className="flex gap-3 mt-3">
-            <button
-              onClick={() => onEnter("agent")}
-              className="flex-1 border rounded-lg px-4 py-3 hover:bg-neutral-50"
-            >
-              Agente
-            </button>
-            <button
-              onClick={() => onEnter("moderator")}
-              className="flex-1 border rounded-lg px-4 py-3 hover:bg-neutral-50"
-            >
-              Moderador
-            </button>
-          </div>
+          <p className="mt-3 text-center text-xs text-neutral-400">
+            Tip: Enter para enviar si ya completaste ID ROOM y rol.
+          </p>
         </div>
       </div>
     </main>
   );
 }
+
 
 /* ==========================================================
    5.1) MAPEOS — Motivo de contacto 3 -> Motivo de contacto local
@@ -697,16 +794,16 @@ export default function App() {
   const role = forcedRole || "agent";
   const isAgent = role === "agent";
 
-  useEffect(() => {
-    const refresh = () => {
-      const p = parseHash();
-      if (p.role) setForcedRole(p.role);
-      setRoomId(p.room || DEFAULT_ROOM_ID);
-    };
-    refresh();
-    window.addEventListener("hashchange", refresh);
-    return () => window.removeEventListener("hashchange", refresh);
-  }, []);
+ useEffect(() => {
+  const refresh = () => {
+    const p = parseHash();
+    setForcedRole(p.role || null);           // <-- siempre setea (incluye null)
+    setRoomId(p.room || DEFAULT_ROOM_ID);
+  };
+  refresh();
+  window.addEventListener("hashchange", refresh);
+  return () => window.removeEventListener("hashchange", refresh);
+}, []);
 
   useEffect(() => {
     setMessages([]);
@@ -766,7 +863,12 @@ export default function App() {
     const finalRoom = (roomDraft || roomId || "").trim();
     setHash(targetRole, finalRoom);
   };
-  const salir = () => setHash(null, "");
+const salir = () => {
+  setForcedRole(null);              // limpia el rol actual en estado
+  setRoomId(DEFAULT_ROOM_ID);       // opcional: limpia la sala
+  setDraft("");                     // opcional: limpia el textarea
+  setHash(null, "");                // navega a #/ (pantalla principal)
+};
 
   const agentLink = useMemo(() => {
     const r = roomId ? `?room=${encodeURIComponent(roomId)}` : "";
@@ -781,11 +883,7 @@ export default function App() {
     return (
       <>
         <Landing roomDraft={roomDraft} setRoomDraft={setRoomDraft} onEnter={goEnter} />
-        <footer className="text-center text-neutral-400 text-xs py-3">
-          Abre <a className="underline" href="#/agente">#/agente</a> y{" "}
-          <a className="underline" href="#/moderador">#/moderador</a> (misma sala) en dos PCs o tabs.
-          Para cambiar de sala: añade <code>?room=soporte1</code>.
-        </footer>
+      
       </>
     );
   }
@@ -841,9 +939,7 @@ export default function App() {
         </div>
 
         <div className="text-center text-neutral-400 text-xs mt-6">
-          Abre <a className="underline" href="#/agente">#/agente</a> y{" "}
-          <a className="underline" href="#/moderador">#/moderador</a> (misma sala) en dos PCs o tabs.
-          Para cambiar de sala: añade <code>?room=soporte1</code>.
+        
         </div>
       </main>
     </div>
